@@ -22,10 +22,10 @@ from tools import (
     create_fit_card,
     normalize_size,
     price_text,
-    search_listings,
     suggest_outfit,
 )
 from generate import ModelUnavailable
+from mcp_client import call_tool
 
 
 # ── session state ─────────────────────────────────────────────────────────────
@@ -107,6 +107,21 @@ def parse_query(query: str) -> dict:
     return {"description": description, "size": size, "max_price": max_price}
 
 
+# ── search, through MCP ───────────────────────────────────────────────────────
+
+def _search(session: dict, description: str, size, max_price, note: str = "") -> list[dict]:
+    """
+    Every search goes through the MCP server (mcp_server.py), never a direct
+    call to tools.search_listings. Each call is recorded in the session.
+    """
+    inputs = {"description": description, "size": size, "max_price": max_price}
+    record = {"tool": "search_listings", "inputs": inputs}
+    if note:
+        record["note"] = note
+    session["tool_calls"].append(record)
+    return call_tool("search_listings", inputs)
+
+
 # ── the empty-search message ──────────────────────────────────────────────────
 
 def _explain_empty(session: dict) -> str:
@@ -131,12 +146,8 @@ def _explain_empty(session: dict) -> str:
         asked += f" under {price_text(max_price)}"
 
     def retry(retry_size, retry_price):
-        session["tool_calls"].append({
-            "tool": "search_listings",
-            "inputs": {"description": desc, "size": retry_size, "max_price": retry_price},
-            "note": "explaining the empty search",
-        })
-        return search_listings(desc, retry_size, retry_price)
+        return _search(session, desc, retry_size, retry_price,
+                       note="explaining the empty search")
 
     if max_price is not None:
         hits = retry(size, None)
@@ -220,9 +231,8 @@ def run_agent(query: str, wardrobe: dict) -> dict:
 
         elif step == "search":
             parsed = session["parsed"]
-            session["tool_calls"].append({"tool": "search_listings", "inputs": dict(parsed)})
-            session["search_results"] = search_listings(
-                parsed["description"], parsed["size"], parsed["max_price"]
+            session["search_results"] = _search(
+                session, parsed["description"], parsed["size"], parsed["max_price"]
             )
             session["searched"] = True
 
