@@ -311,6 +311,35 @@ three of the acceptance criteria.
   price: *"the closest match, "Denim Jacket — Light Wash, Cropped", is $42.
   Raise your max price to $42 to see it."* (`agent.py::_explain_empty`)
 
+**Unit 4, moment 1: "all five met" wasn't the end of it**
+
+- *What I asked for:* For Claude to run the unit 4 test (MCP move, failure
+  modes, five tries per criterion) and score it.
+- *What came back:* The scorer said all five criteria were met, 5 of 5. Claude
+  then read all 20 fit cards and outfits instead of stopping there. It found
+  two things no criterion measured. 16 of 20 cards opened "Scored this". And
+  every empty-wardrobe fit card claimed the user had worn the jacket with
+  pieces they don't own ("I threw it over an olive green slip dress"), even
+  though criterion 5 was written to catch exactly that kind of invented closet.
+- *What I changed:* Criterion 5 gets a revision in `criteria.md`, written under
+  the original, which stays untouched. The revision checks the fit card
+  instead of the outfit text. Rescored on the same before tries, it's 0/5, and
+  that miss became the diagnosis and the improvement.
+
+**Unit 4, moment 2: the fix worked, and also didn't**
+
+- *What I asked for:* One change aimed at that diagnosis: rewrite
+  `create_fit_card`'s prompt so the outfit isn't framed as "How I'm styling
+  it".
+- *What came back:* The revised criterion went from 0/5 to 5/5. But Claude
+  counted the side effects rather than calling it a clean win. 19 of 20 cards
+  now say "I'm planning to", so the formula moved instead of going away. And
+  2 of 20 wrote the price as "eighteen bucks", which never happened before.
+- *What I changed:* Both are reported in **The Improvement** and **What's
+  Still Broken** rather than fixed. The brief allows one change, and a second
+  prompt edit in the same run would have made it impossible to tell which
+  change did what.
+
 <!-- ═══════════════════════ UNIT 4 — THE TEST ═══════════════════════
 
      Don't fill these in during unit 3.
@@ -775,6 +804,48 @@ try 5: … I'm planning to style it with high-waisted black wide-leg trousers, a
 <!-- For each criterion still missed: what you'd do, and why you stopped where
      you did. "I ran out of time" is fine if it's true. Pretending nothing is
      left is not. -->
+
+No criterion is still missed. All five originals and the revised criterion 5
+are MET after the change. The criteria were too easy to tell me much, so here
+is what's still broken that they didn't catch, starting with the worst.
+
+1. **Fit cards are formulaic.** 18 of 20 open "Scored this", and 19 of 20 say
+   "I'm planning to". This is the real weakness of the agent.
+   - *What I'd do:* first tighten criterion 4: across 5 tries, no more than 2
+     cards share their first two words. Both runs would fail it (5 of 5 tries
+     in the criterion 4 scenario opened "Scored this" before, and 4 of 5
+     after). Then fix it in `create_fit_card`, either by giving the model one
+     of several caption shapes chosen at random per call (a question, a
+     one-line reaction, a styling plan), or by telling it not to open with the
+     item.
+   - *Why I stopped:* the brief allows one change, and that change went to the
+     closet-invention miss, because it's an actual false claim about the user.
+2. **The price sometimes comes out as words.** 2 of 20 after-run cards said
+   "eighteen bucks" instead of `$18`.
+   - *What I'd do:* criterion 4 only scores one item (the $24 tee), so first
+     I'd run it on several items. Then I'd add a check in `create_fit_card`: if
+     `price_text(price)` isn't in the reply, ask once more. That's a post-check
+     on a model call, not a prompt tweak, so the result can be verified.
+   - *Why I stopped:* found in the after run. Fixing it would have been a
+     second change.
+3. **A rate-limit failure isn't handled.** `generate()` raises a plain
+   `RuntimeError` after 5 rate-limit retries. `run_agent` only catches
+   `ModelUnavailable` and `MCPError`, so that error escapes. `app.py` prints
+   it readably, but `run_eval.py` and `serve.py` would see a raw exception.
+   - *Why I stopped:* it never happened in 80 real calls, and catching every
+     `RuntimeError` would also swallow the iteration-limit error from
+     `trace.check_iterations`. Doing it properly means giving the rate-limit
+     error its own exception class in `generate.py`.
+4. **The MCP move made the empty path slower.** Every search starts a new
+   server process (about 0.3 s). The empty-search path can make up to 4
+   searches, so an impossible query now takes about 1.6 s instead of being
+   instant. Holding one MCP session open per `run_agent` call would fix it;
+   the starter's client opens a fresh one per call on purpose.
+5. **Search ranks weak matches low but still returns them.** For example,
+   cargo pants come back for "graphic tee" because their description mentions
+   a tee. The agent only uses the top result, which was right in every run,
+   so no criterion is affected. It would matter if the agent ever showed more
+   than one result.
 
 
 
