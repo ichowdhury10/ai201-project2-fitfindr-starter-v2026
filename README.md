@@ -196,7 +196,8 @@ calling the model:
 
 1. `query`: the raw text.
 2. `parsed`: `{description, size, max_price}`.
-3. `search_results`: the list from `search_listings`. `searched` becomes
+3. `search_results`: the list from `search_listings`, called through MCP
+   since unit 4 (`agent.py::_search`). `searched` becomes
    `True`, so an empty result can be told apart from "not run yet".
 4. `selected_item`: `search_results[0]`.
 5. `outfit_suggestion`: read from the session together with `selected_item`
@@ -679,26 +680,93 @@ The listing search couldn't run: the MCP server (mcp_server.py) didn't answer (C
 
      `python run_eval.py --label after` -->
 
-**What I changed:**
+**What I changed:** one prompt, in `tools.py::create_fit_card`, the system
+prompt and user prompt together. Nothing else in the agent changed between
+the two runs.
 
-**Which failure it was meant to fix:**
+```diff
+-        "You write short social media captions for thrift finds. Write like a "
+-        "real person posting their outfit, not like a product listing. "
++        "You write short social media captions for thrift finds. Write like a "
++        "real person posting about something they just found, not like a "
++        "product listing. ...
+ ...
+-        f"How I'm styling it:\n{outfit.strip()}\n\n"
++        "Outfit ideas for it (these may include pieces I don't own):\n"
++        f"{outfit.strip()}\n\n"
+         f"Mention the item, the price ({price}), and where I got it "
+-        f"({platform}), each exactly once. Pick one outfit from above and be "
+-        "specific about the vibe. Only mention a brand if one is listed above."
++        f"({platform}), each exactly once. Pick one outfit idea and be "
++        "specific about the vibe, but describe the other pieces as plans or "
++        "ideas, never as something I'm already wearing or have already worn. "
++        "Only mention a brand if one is listed above."
+```
+
+**Which failure it was meant to fix:** the revised criterion 5 miss (0/5). The
+diagnosis put it in this prompt. `create_fit_card` can't know the wardrobe was
+empty, and the prompt introduced every outfit as "How I'm styling it", so
+general ideas came out as first-person claims about pieces the user doesn't
+own. I picked a prompt rewrite over changing `create_fit_card`'s inputs (for
+example, passing in whether the wardrobe was empty). That would have changed
+the tool's spec and both of its call sites, and the brief allows one change.
 
 ### Run Log — After
 
+`python run_eval.py --label after`, the same five scenarios, five tries each,
+cache off, 40 model calls (`results/run_2026-10-11_2256_after.md` and
+`.json`). Scored with `python score_run.py
+results/run_2026-10-11_2256_after.json`, and I read every card.
+
 | Criterion | Target | Try 1 | Try 2 | Try 3 | Try 4 | Try 5 | Verdict |
 |---|---|---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |  |  |
+| 1. Matching query completes all three tools | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 2. Impossible query stops before suggest_outfit | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 3. Item search found is the item both model tools receive | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 4. Fit card has exact price, platform, 2–4 sentences, ≤80 words | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 5. Empty wardrobe completes, outfit never says your/yours | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 5r. *Revised:* empty-wardrobe fit card claims no owned piece | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+
+Side by side:
+
+| Criterion | Before | After |
+|---|---|---|
+| 1 | MET (5/5) | MET (5/5) |
+| 2 | MET (5/5) | MET (5/5) |
+| 3 | MET (5/5) | MET (5/5) |
+| 4 | MET (5/5) | MET (5/5) |
+| 5 (original) | MET (5/5) | MET (5/5) |
+| **5r (revised)** | **MISSED (0/5)** | **MET (5/5)** |
+| *Not a criterion:* cards opening "Scored this" | 16 of 20 | 18 of 20 |
+| *Not a criterion:* cards saying "planning to" / "my plan is" | 0 of 20 | 19 of 20 |
+| *Not a criterion:* cards without the `$N` price string, all scenarios | 0 of 20 | 2 of 20 |
+
+The empty-wardrobe cards after the change (`tools.py::create_fit_card`):
+
+```
+try 1: … I'm planning to throw it over an olive green slip dress with some beat-up sneakers for an easy streetwear vibe. …
+try 2: … I'm planning to throw it over an earth-tone slip dress with some vintage leather boots for a cool textured vibe. Can't wait to style it.
+try 3: … I can't wait to throw it over a floral slip dress with some white sneakers for the ultimate weekend vibe. 🌸
+try 4: … I'm planning to throw it over an olive green slip dress with some beat-up sneakers for the ultimate grunge-meets-casual vibe. …
+try 5: … I'm planning to style it with high-waisted black wide-leg trousers, a tucked-in white baby tee, and chunky retro sneakers …
+```
 
 **Did it help, and how do I know:**
 
-<!-- If it made things worse, say that. Honestly reported, that earns full
-     credit and is more interesting than one that worked. -->
-
-
+- **It fixed what it was aimed at.** The revised criterion 5 went from 0/5 to
+  5/5 on fresh tries. The regex flagged nothing, and reading the five cards
+  agrees: each one describes the outfit as a plan.
+- **Nothing regressed on the five original criteria.**
+- **It traded one formula for another.** 19 of 20 cards now contain "I'm
+  planning to" (or "my plan is"), up from 0. The opener got slightly *more*
+  uniform: "Scored this" went from 16 to 18 of 20. The words changed, but
+  the pattern problem from the diagnosis is still there.
+- **It may have introduced a small new slip.** In 2 of the 5 criterion-3
+  tries, the $18 baby tee's price came out as "eighteen bucks" instead of
+  `$18`. That happened 0 times in 20 before. Criterion 4 didn't catch it,
+  because its scenario is the $24 tee. I can't be sure from 20 cards that the
+  new prompt caused it. A longer "write it casually" instruction pulling the
+  model toward slang is a plausible mechanism, not a proven one.
 
 ---
 

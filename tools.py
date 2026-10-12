@@ -326,17 +326,23 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
 
     system = (
         "You write short social media captions for thrift finds. Write like a "
-        "real person posting their outfit, not like a product listing. "
-        "2 to 4 sentences, under 80 words, first person. No hashtags. At most "
-        "two emoji. Plain text only."
+        "real person posting about something they just found, not like a "
+        "product listing. 2 to 4 sentences, under 80 words, first person. No "
+        "hashtags. At most two emoji. Plain text only."
     )
+    # Unit 4 improvement: the outfit is a set of ideas that may use pieces the
+    # user doesn't own (always, when the wardrobe is empty), so it is no longer
+    # introduced as "How I'm styling it".
     prompt = (
         "Write a caption for this thrift find.\n\n"
         f"{_describe_item(new_item)}\n\n"
-        f"How I'm styling it:\n{outfit.strip()}\n\n"
+        "Outfit ideas for it (these may include pieces I don't own):\n"
+        f"{outfit.strip()}\n\n"
         f"Mention the item, the price ({price}), and where I got it "
-        f"({platform}), each exactly once. Pick one outfit from above and be "
-        "specific about the vibe. Only mention a brand if one is listed above."
+        f"({platform}), each exactly once. Pick one outfit idea and be "
+        "specific about the vibe, but describe the other pieces as plans or "
+        "ideas, never as something I'm already wearing or have already worn. "
+        "Only mention a brand if one is listed above."
     )
 
     response = generate(prompt, system=system)
