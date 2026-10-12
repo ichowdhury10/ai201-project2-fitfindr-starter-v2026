@@ -328,19 +328,102 @@ three of the acceptance criteria.
      `python run_eval.py --label before` runs everything and writes the table
      into results/. Paste it here and fill in the verdicts. -->
 
+**How these were run:** `python run_eval.py --label before`, five scenarios
+with five tries each and the cache off, 40 real model calls in all
+(`results/run_2026-10-11_2250_before.md` and `.json`). There's one scenario per
+criterion, using the exact query `criteria.md` names
+([scenarios.py](scenarios.py)).
+
+**How PASS/FAIL was decided:** `python score_run.py
+results/run_2026-10-11_2250_before.json` applies each criterion's "How to
+check" line to the saved session of every try, then I read every fit card and
+outfit myself. The scorer and I agreed on all 25.
+
+The only change to `run_eval.py` is that it also saves each try's full session
+and model-call count to JSON. Without that, criteria 2 and 3 couldn't be
+scored from these same tries, because the markdown report doesn't include
+`tool_calls`.
+
 | Criterion | Target | Try 1 | Try 2 | Try 3 | Try 4 | Try 5 | Verdict |
 |---|---|---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |  |  |
+| 1. Matching query completes all three tools | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 2. Impossible query stops before suggest_outfit | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 3. Item search found is the item both model tools receive | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 4. Fit card has exact price, platform, 2–4 sentences, ≤80 words | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 5. Empty wardrobe completes, outfit never says your/yours | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
 
-**Real output from one try**, pasted as text, naming the file and function
-that produced it:
+**Real output from one try per criterion**, pasted as text. The session comes
+from `agent.py::run_agent`, captured by `run_eval.py::run_once`. Outfits are
+from `tools.py::suggest_outfit` and fit cards from `tools.py::create_fit_card`.
+
+*Criterion 1, try 1.* The session's `tool_calls` were `search_listings` →
+`suggest_outfit` → `create_fit_card`, and `error` was `None`.
 
 ```
+selected_item: Graphic Tee — 2003 Tour Bootleg Style ($24.0, depop)
+outfit_suggestion:
+1. Pair the graphic tee with the baggy straight-leg jeans, the black cropped zip hoodie, and the black combat boots, finishing the look with the black crossbody bag.
 
+2. Tuck the graphic tee into the wide-leg khaki trousers, layer the vintage black denim jacket on top, and wear them with the chunky white sneakers and the brown leather belt.
+fit_card:
+Scored this vintage-style bootleg graphic tee on Depop for just $24. I am pairing it with baggy straight-leg jeans, a black cropped zip hoodie, and combat boots for the ultimate grunge street look. The worn-in cotton feels so good and has that perfect boxy fit. 🖤
+```
+
+*Criterion 2, try 1.* Trace from `agent.py::run_agent`. The model-call count
+for this try was 0:
+
+```
+[1] parse_query (regex)
+      in:  designer ballgown size XXS under $5
+      out: {'description': 'designer ballgown', 'size': 'XXS', 'max_price': 5.0}
+[2] search_listings (via MCP)
+      in:  description='designer ballgown', size='XXS', max_price=5.0
+      out: [] (empty)
+[3] search_listings (via MCP)
+      in:  description='designer ballgown', size='XXS', max_price=None
+      out: [] (empty)
+      →    explaining the empty search
+[4] search_listings (via MCP)
+      in:  description='designer ballgown', size=None, max_price=5.0
+      out: [] (empty)
+      →    explaining the empty search
+[5] search_listings (via MCP)
+      in:  description='designer ballgown', size=None, max_price=None
+      out: [] (empty)
+      →    explaining the empty search
+[6] branch: search came back empty
+      out: No listings matched "designer ballgown" in size XXS under $5. Nothing in the listings matches the words "desig…
+      →    STOP — suggest_outfit and create_fit_card are not called
+error: No listings matched "designer ballgown" in size XXS under $5. Nothing in the listings matches the words "designer ballgown" at any size or price, so changing the filters won't help. Try broader words: a category (tee, jeans, jacket, sneakers) or a style (vintage, y2k, grunge, cottagecore).
+```
+
+*Criterion 3, try 1.* `session["selected_item"]["id"]` and
+`session["search_results"][0]["id"]` are both `lst_002`, and so is
+`session["tool_calls"]`:
+
+```
+[{'tool': 'search_listings', 'inputs': {'description': 'vintage graphic tee', 'size': 'M', 'max_price': 30.0}},
+ {'tool': 'suggest_outfit', 'item_id': 'lst_002'},
+ {'tool': 'create_fit_card', 'item_id': 'lst_002'}]
+```
+
+*Criterion 4, try 4* (the shortest card). It has `$24` and `Depop`, 3
+sentences, and 39 words:
+
+```
+Scored this bootleg tour tee on Depop for just $24. I love the boxy, worn-in cotton. Tucking it into wide-leg khaki trousers with my black denim jacket and chunky white sneakers gives off such a cool, effortless vibe. 🖤
+```
+
+*Criterion 5, try 2.* Empty wardrobe. The outfit contains no "your"/"yours",
+and there's a fit card:
+
+```
+outfit_suggestion:
+1. Pair the cropped denim jacket with a high-waisted black pleated midi skirt, a fitted white baby tee, and chunky black loafers for a balanced streetwear look.
+
+2. Throw the jacket over a slip dress in an olive green tone and add vintage leather boots to create an effortless contrast between rugged denim and soft silk.
+fit_card:
+Obsessed with this vintage Wrangler denim jacket I just scored on Poshmark for only $42. I threw it over an olive green slip dress with some beat-up leather boots for that perfect mix of rugged and soft. It is honestly going to be my daily uniform all season. 🧥✨
 ```
 
 ---

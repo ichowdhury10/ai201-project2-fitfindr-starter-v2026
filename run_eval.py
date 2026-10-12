@@ -30,6 +30,7 @@ mode — caching is what usually explains it.
 
 import argparse
 import datetime as dt
+import json
 import sys
 import traceback
 
@@ -41,6 +42,7 @@ def run_once(scenario, use_trace=True):
     """One scenario, one try. Returns everything worth recording."""
     from agent import run_agent
     from utils.data_loader import get_example_wardrobe, get_empty_wardrobe
+    import generate
     import trace as trace_module
 
     wardrobe = (
@@ -51,11 +53,14 @@ def run_once(scenario, use_trace=True):
         trace_module.start_trace()
 
     record = {"error": None, "session": None, "trace": "", "crashed": None}
+    calls_before = generate.call_count()
     try:
         record["session"] = run_agent(scenario["query"], wardrobe)
     except Exception as exc:  # noqa: BLE001 — a crash is a result worth logging
         record["crashed"] = f"{type(exc).__name__}: {exc}"
         record["traceback"] = traceback.format_exc()
+    # Added in unit 4: model calls this try made, for criterion 2 ("0 model calls").
+    record["model_calls"] = generate.call_count() - calls_before
 
     if use_trace:
         record["trace"] = trace_module.get_trace()
@@ -202,6 +207,16 @@ def write_report(rows, args):
                 lines += ["Trace:", "", "```", record["trace"], "```", ""]
 
     path.write_text("\n".join(lines), encoding="utf-8")
+
+    # Added in unit 4: every try's full session, so score_run.py can apply the
+    # criteria to these exact tries rather than to a second run.
+    raw = [
+        {"scenario": row["scenario"], "tries": row["tries"]}
+        for row in rows
+    ]
+    path.with_suffix(".json").write_text(
+        json.dumps(raw, indent=2, default=str, ensure_ascii=False), encoding="utf-8"
+    )
 
     import generate
 
