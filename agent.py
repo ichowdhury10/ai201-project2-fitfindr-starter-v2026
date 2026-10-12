@@ -25,7 +25,7 @@ from tools import (
     suggest_outfit,
 )
 from generate import ModelUnavailable
-from mcp_client import call_tool
+from mcp_client import MCPError, call_tool
 
 
 # ── session state ─────────────────────────────────────────────────────────────
@@ -119,7 +119,14 @@ def _search(session: dict, description: str, size, max_price, note: str = "") ->
     if note:
         record["note"] = note
     session["tool_calls"].append(record)
-    return call_tool("search_listings", inputs)
+    results = call_tool("search_listings", inputs)
+    trace.step(
+        "search_listings (via MCP)",
+        inputs=f"description={description!r}, size={size!r}, max_price={max_price!r}",
+        returned=results,
+        note=note,
+    )
+    return results
 
 
 # ── the empty-search message ──────────────────────────────────────────────────
@@ -209,16 +216,43 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     branch is "stop_empty": an empty search ends the run before suggest_outfit
     is ever called.
 
-    ─────────────────────────────────────────────────────────────────────────
-    IN UNIT 4 you come back and add two things:
-
-      • Trace calls. One per step. `trace.step("search_listings", inputs=...,
-        returned=...)` — see trace.py. Your README needs the output.
-
-      • A handler for ModelUnavailable, so a bad key produces a message rather
-        than a stack trace. The import is already at the top of this file.
+    Every step records itself with trace.step(). A ModelUnavailable from
+    either model tool, or an MCPError from the search, ends the run with a
+    message in session["error"] instead of a stack trace.
     """
     session = new_session(query, wardrobe)
+    try:
+        return _loop(session)
+    except ModelUnavailable as exc:
+        session["error"] = _model_unavailable_message(session, exc)
+    except MCPError as exc:
+        first_line = str(exc).splitlines()[0]
+        session["error"] = (
+            "The listing search couldn't run: the MCP server (mcp_server.py) "
+            f"didn't answer ({first_line}). Nothing was searched, so try the "
+            "same query again. If it keeps failing, run `python mcp_server.py` "
+            "on its own to see the server's error."
+        )
+    trace.step("stopped: a tool failed", returned=session["error"])
+    return session
+
+
+def _model_unavailable_message(session: dict, exc: Exception) -> str:
+    failed = session["tool_calls"][-1]["tool"] if session["tool_calls"] else "a model call"
+    item = session["selected_item"]
+    found = (
+        f" The search itself worked: it found \"{item['title']}\" for "
+        f"{price_text(item['price'])} on {item['platform']}."
+        if item else ""
+    )
+    return (
+        f"Couldn't reach the AI model during {failed}, so there's no outfit "
+        f"or fit card this time.{found} {exc} Then run the same query again."
+    )
+
+
+def _loop(session: dict) -> dict:
+    """The planning loop itself. run_agent wraps it to catch tool failures."""
     count = 0
 
     while True:
@@ -228,6 +262,7 @@ def run_agent(query: str, wardrobe: dict) -> dict:
 
         if step == "parse":
             session["parsed"] = parse_query(session["query"])
+            trace.step("parse_query (regex)", inputs=session["query"], returned=str(session["parsed"]))
 
         elif step == "search":
             parsed = session["parsed"]
@@ -238,22 +273,45 @@ def run_agent(query: str, wardrobe: dict) -> dict:
 
         elif step == "stop_empty":
             session["error"] = _explain_empty(session)
+            trace.step(
+                "branch: search came back empty",
+                returned=session["error"],
+                note="STOP — suggest_outfit and create_fit_card are not called",
+            )
             return session
 
         elif step == "select":
             session["selected_item"] = session["search_results"][0]
+            trace.step(
+                "select_item",
+                inputs=f"{len(session['search_results'])} results",
+                returned=session["selected_item"],
+                note="branch: results found → take the best match, go to suggest_outfit",
+            )
 
         elif step == "suggest_outfit":
             item = session["selected_item"]
             session["tool_calls"].append({"tool": "suggest_outfit", "item_id": item["id"]})
             session["outfit_suggestion"] = suggest_outfit(item, session["wardrobe"])
+            owned = len((session["wardrobe"] or {}).get("items") or [])
+            trace.step(
+                "suggest_outfit",
+                inputs=f"new_item={item['id']} ({item['title']}), wardrobe={owned} items",
+                returned=session["outfit_suggestion"],
+            )
 
         elif step == "create_fit_card":
             item = session["selected_item"]
             session["tool_calls"].append({"tool": "create_fit_card", "item_id": item["id"]})
             session["fit_card"] = create_fit_card(session["outfit_suggestion"], item)
+            trace.step(
+                "create_fit_card",
+                inputs=f"new_item={item['id']}, outfit=session['outfit_suggestion']",
+                returned=session["fit_card"],
+            )
 
         else:  # "done"
+            trace.step("done", note=f"{count - 1} steps, fit card ready")
             return session
 
 

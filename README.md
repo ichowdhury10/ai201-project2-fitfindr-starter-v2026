@@ -389,24 +389,141 @@ that produced it:
      the same length, your branch isn't working — and this is the fastest way
      anyone will ever find that out. -->
 
-**Happy path**
+**Happy path:** `python app.py ask 'vintage graphic tee under $30' --trace`,
+traced by `agent.py::run_agent` (one `trace.step()` per step; the MCP call is
+step 2):
 
 ```
-
+[1] parse_query (regex)
+      in:  vintage graphic tee under $30
+      out: {'description': 'vintage graphic tee', 'size': None, 'max_price': 30.0}
+[2] search_listings (via MCP)
+      in:  description='vintage graphic tee', size=None, max_price=30.0
+      out: 10 items: Graphic Tee — 2003 Tour Bootleg Style, Vintage Band Tee — Faded Grey, Vintage Graphic Hoodie — Faded Black … +7 more
+[3] select_item
+      in:  10 results
+      out: Graphic Tee — 2003 Tour Bootleg Style ($24.0, depop)
+      →    branch: results found → take the best match, go to suggest_outfit
+[4] suggest_outfit
+      in:  new_item=lst_006 (Graphic Tee — 2003 Tour Bootleg Style), wardrobe=10 items
+      out: 1. Layer the graphic tee over the wide-leg khaki trousers and finish the look with chunky white sneakers and t…
+[5] create_fit_card
+      in:  new_item=lst_006, outfit=session['outfit_suggestion']
+      out: Scored this vintage-style bootleg tee on Depop for just $24 and it's already my favorite piece. I love the box…
+[6] done
+      →    5 steps, fit card ready
 ```
 
-**Empty search**
+**Empty search:** `python app.py ask 'designer ballgown size XXS under $5' --trace`
 
 ```
+[1] parse_query (regex)
+      in:  designer ballgown size XXS under $5
+      out: {'description': 'designer ballgown', 'size': 'XXS', 'max_price': 5.0}
+[2] search_listings (via MCP)
+      in:  description='designer ballgown', size='XXS', max_price=5.0
+      out: [] (empty)
+[3] search_listings (via MCP)
+      in:  description='designer ballgown', size='XXS', max_price=None
+      out: [] (empty)
+      →    explaining the empty search
+[4] search_listings (via MCP)
+      in:  description='designer ballgown', size=None, max_price=5.0
+      out: [] (empty)
+      →    explaining the empty search
+[5] search_listings (via MCP)
+      in:  description='designer ballgown', size=None, max_price=None
+      out: [] (empty)
+      →    explaining the empty search
+[6] branch: search came back empty
+      out: No listings matched "designer ballgown" in size XXS under $5. Nothing in the listings matches the words "desig…
+      →    STOP — suggest_outfit and create_fit_card are not called
 
+0 model calls this session
 ```
 
-**On the MCP move:** <!-- what changed in your code, and whether anything
-behaved differently afterwards. If the rewire didn't work, say exactly where it
-broke — the error text and the last thing that worked. That earns the point in
-full. -->
+**Both traces have 6 lines, but the branch is working.** Steps 3–5 are
+`_explain_empty` re-running the search with one filter dropped at a time, to
+work out what the message should tell the user to change. For this query every
+retry is empty too, so it ends up suggesting broader words. What the empty path
+skips is what matters: neither `suggest_outfit` nor `create_fit_card` runs, and
+there are 0 model calls.
 
+A query where dropping one filter is enough makes the shorter path visible.
+`'denim jacket under $10'` is parse → search `[]` → retry without the price
+(finds the jacket) → stop, which is 4 lines.
 
+**Failure modes, triggered on purpose**
+
+| Failure | How I triggered it | What the agent said (before any handler) | Handler added |
+|---|---|---|---|
+| Empty search | `python app.py ask 'designer ballgown size XXS under $5'` | Message above; stopped with 0 model calls | None needed. The unit 3 branch already handled it |
+| Empty wardrobe | `AI201_CACHE=0 python app.py ask 'denim jacket under $50' --empty-wardrobe` | General advice with no owned pieces, then a full fit card (output below) | None needed. `suggest_outfit` already handled it |
+| Model unavailable | Ran `corduroy wide-leg pants under $40` (not cached) with one character of the key changed, as a `GEMINI_API_KEY=…` override so `.env` wasn't edited, plus `AI201_CACHE=0` | `app.py` printed `ModelUnavailable: The model rejected your API key…` and exited with code 1. Calling `run_agent` directly (which is what `run_eval.py` and `serve.py` do) raised a raw `generate.ModelUnavailable` stack trace, and the session, including the item the search had found, was lost | `agent.py::run_agent` catches `ModelUnavailable` and writes the message below into `session["error"]` |
+| MCP server down (extra) | Pointed `mcp_client.SERVER` at a missing file | Would have been a raw `MCPError` | `run_agent` also catches `MCPError` |
+
+Empty wardrobe output:
+
+```
+(running with an empty wardrobe)
+
+  Found:    Denim Jacket — Light Wash, Cropped — $42.0 on poshmark
+
+  Outfit:   1. Pair the cropped denim jacket with a high-waisted black midi skirt, a tucked-in white graphic tee, and chunky black platform loafers for a balanced streetwear look.
+
+2. Throw the jacket over a slip dress in an earthy olive green tone and complete the outfit with retro canvas sneakers and a canvas tote bag for an effortless vintage vibe.
+
+  Fit card: Scored this vintage Wrangler denim jacket on Poshmark for just $42 and I am obsessed with the structured shoulders. I threw it over an olive green slip dress with some retro canvas sneakers for such an effortless vintage vibe. It's officially my new go-to layer.
+```
+
+Model unavailable, after the handler:
+
+```
+[1] parse_query (regex)
+      in:  corduroy wide-leg pants under $40
+      out: {'description': 'corduroy wide-leg pants', 'size': None, 'max_price': 40.0}
+[2] search_listings (via MCP)
+      in:  description='corduroy wide-leg pants', size=None, max_price=40.0
+      out: 5 items: Corduroy Wide-Leg Pants — Rust, Wide-Leg Linen Trousers — Natural, Low-Rise Cargo Pants — Khaki … +2 more
+[3] select_item
+      in:  5 results
+      out: Corduroy Wide-Leg Pants — Rust ($32.0, depop)
+      →    branch: results found → take the best match, go to suggest_outfit
+[4] stopped: a tool failed
+      out: Couldn't reach the AI model during suggest_outfit, so there's no outfit or fit card this time. The search itse…
+
+  Couldn't reach the AI model during suggest_outfit, so there's no outfit or fit card this time. The search itself worked: it found "Corduroy Wide-Leg Pants — Rust" for $32 on depop. The model rejected your API key. Check GEMINI_API_KEY in your .env file, or create a fresh key at aistudio.google.com. Then run the same query again.
+```
+
+MCP server down, after the handler:
+
+```
+The listing search couldn't run: the MCP server (mcp_server.py) didn't answer (Couldn't call 'search_listings' over MCP: unhandled errors in a TaskGroup (1 sub-exception)). Nothing was searched, so try the same query again. If it keeps failing, run `python mcp_server.py` on its own to see the server's error.
+```
+
+**On the MCP move:**
+
+- **The server:** `mcp_server.py` registers `search_listings` with the same
+  three typed inputs as the Tool Inventory: `description: str`,
+  `size: str | None`, and `max_price: float | None`. Its description gives the
+  units (US dollars, inclusive), the size-matching rule, and the empty case.
+  `python mcp_client.py` lists it with exactly those inputs.
+- **The agent:** every search in `agent.py` now goes through
+  `agent.py::_search`, which calls `mcp_client.call_tool("search_listings", …)`.
+  That includes the retries inside `_explain_empty`. `agent.py` no longer
+  imports `tools.search_listings`.
+- **I checked it's really MCP:** I replaced `tools.search_listings` in the
+  agent's process with a function that exits. Searches still worked, because
+  they run in the server process.
+- **What came back didn't change.** Over MCP the result was `==` to the direct
+  call for `'vintage graphic tee'` under $30 (10 dicts; `price` still a float;
+  `brand` still `None`, not `"None"`). The empty case still comes back as `[]`,
+  not `None`, so the branch didn't need touching.
+- **What did change:** each call now starts a server process, which takes about
+  0.3 seconds. The empty path makes up to 4 searches, so
+  `'designer ballgown size XXS under $5'` now takes about 1.6 seconds instead
+  of being instant. The agent also has a new way to fail (the server not
+  starting), which got its own handler.
 
 ---
 
