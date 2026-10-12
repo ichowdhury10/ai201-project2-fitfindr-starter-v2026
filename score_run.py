@@ -123,7 +123,30 @@ def check_5(t):
     return problems
 
 
+# Criterion 5 as revised in unit 4 (criteria.md keeps the original above it).
+_STYLING_CLAIM = re.compile(
+    r"\bI(?:'m|’m| am)?\s+(?:just\s+)?(?:\w+ing|threw|tucked|layered|paired|styled|wore|put)\s+(?:it|this)\b",
+    re.IGNORECASE,
+)
+
+
+def check_5r(t):
+    s = t["session"]
+    problems = []
+    if s["error"] is not None:
+        problems.append(f"error set: {s['error'][:60]}")
+    card = s["fit_card"] or ""
+    if not card.strip():
+        problems.append("no fit card")
+    for match in _STYLING_CLAIM.finditer(card):
+        rest = re.split(r"(?<=[.!?])\s", card[match.end():], maxsplit=1)[0]
+        if re.search(r"\b(with|over|under|into)\b", rest, re.IGNORECASE):
+            problems.append(f"claims an owned piece: {(match.group(0) + rest)[:70]!r}")
+    return problems
+
+
 CHECKS = {1: check_1, 2: check_2, 3: check_3, 4: check_4, 5: check_5}
+REVISED = {5: ("5r", check_5r, "REVISED: empty-wardrobe fit card claims no owned piece")}
 
 
 def main():
@@ -143,30 +166,46 @@ def main():
         "|---|---|---|---|---|---|---|---|",
     ]
     details = []
-    for row in rows:
-        number = row["scenario"].get("criterion")
-        if number not in CHECKS:
-            continue
+
+    def score(name, label, check, target, tries):
         cells = []
-        for i, t in enumerate(row["tries"], 1):
-            problems = (
-                [f"crashed: {t['crashed']}"] if t.get("crashed") else CHECKS[number](t)
-            )
+        for i, t in enumerate(tries, 1):
+            problems = [f"crashed: {t['crashed']}"] if t.get("crashed") else check(t)
             cells.append("FAIL" if problems else "PASS")
             if problems:
-                details.append(f"  criterion {number}, try {i}: " + "; ".join(problems))
+                details.append(f"  criterion {name}, try {i}: " + "; ".join(problems))
         passes = cells.count("PASS")
-        target = TARGETS[number]
         verdict = "MET" if passes >= target else "MISSED"
         table.append(
-            f"| {number}. {LABELS[number]} | {target} of 5 | "
+            f"| {name}. {label} | {target} of 5 | "
             + " | ".join(cells)
             + f" | {verdict} ({passes}/{len(cells)}) |"
         )
 
+    cards = []
+    for row in rows:
+        number = row["scenario"].get("criterion")
+        cards += [(t["session"] or {}).get("fit_card") for t in row["tries"] if t.get("session")]
+        if number not in CHECKS:
+            continue
+        score(number, LABELS[number], CHECKS[number], TARGETS[number], row["tries"])
+        if number in REVISED:
+            name, check, label = REVISED[number]
+            score(name, label, check, TARGETS[number], row["tries"])
+
     print("\n".join(table))
     print("\nWhy each FAIL failed:" if details else "\nNo FAILs.")
     print("\n".join(details))
+
+    # Not a criterion: how often the fit cards open the same way.
+    cards = [c for c in cards if c]
+    openers = {}
+    for card in cards:
+        opener = " ".join(card.split()[:2])
+        openers[opener] = openers.get(opener, 0) + 1
+    top = sorted(openers.items(), key=lambda kv: -kv[1])[:3]
+    print(f"\nFit card openers across all {len(cards)} cards (not a criterion): "
+          + ", ".join(f"{o!r} ×{n}" for o, n in top))
 
 
 if __name__ == "__main__":

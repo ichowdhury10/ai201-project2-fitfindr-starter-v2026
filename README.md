@@ -448,15 +448,77 @@ Obsessed with this vintage Wrangler denim jacket I just scored on Poshmark for o
 
 | # | Criterion | Target | Verdict | How I decided |
 |---|---|---|---|---|
-| 1 |  |  |  |  |
-| 2 |  |  |  |  |
-| 3 |  |  |  |  |
-| 4 |  |  |  |  |
-| 5 |  |  |  |  |
+| 1 | Matching query completes all three tools | 4 of 5 | **MET (5/5)** | In every try, `error` was `None`, there was a non-empty fit card, and `tool_calls` was exactly search → suggest → card. No crashes, no rate-limit failures. |
+| 2 | Impossible query stops before `suggest_outfit` | 5 of 5 | **MET (5/5)** | Every try made 0 model calls, left `outfit_suggestion` and `fit_card` as `None`, recorded no model tool in `tool_calls`, and named "the words" as the thing to change. |
+| 3 | Item search found is the item both model tools receive | 5 of 5 | **MET (5/5)** | In all 5 tries, `selected_item`, `search_results[0]`, and both `item_id`s were `lst_002` (the S/M baby tee, not the unfiltered top hit `lst_006`). |
+| 4 | Fit card has exact price, platform, 2–4 sentences, ≤80 words | 4 of 5 | **MET (5/5)** | All 5 cards had `$24` and `Depop`, 3 sentences each, 39–54 words. I read every card, not just the scorer's output. |
+| 5 | Empty wardrobe completes, outfit never says "your"/"yours" | 4 of 5 | **MET (5/5)** | All 5 completed. None of the 5 outfit suggestions contains "your" or "yours" as a whole word. |
+| 5r | *Revised:* empty-wardrobe fit card claims no owned piece | 4 of 5 | **MISSED (0/5)** | Scored on the **same five before tries**. Every card says the user wore or styled the jacket with a specific piece their empty wardrobe doesn't have (quotes below). |
 
 **Diagnoses**
 
+**Nothing missed against the targets as written, and that says more about the
+targets than about the agent.** Being honest about each one:
 
+- **Criteria 2 and 3 can't fail at random.** They're code paths with no model
+  in them: regex, an MCP search, and dict handling. 5 of 5 was the only
+  sensible target, and they guard against bugs rather than measure quality.
+  Passing them shows the branch and the state are wired correctly, which is
+  what they're for. But they were never going to be close.
+- **Criterion 1 was low.** I allowed one model or network failure in five, and
+  none happened. 40 calls, and the limiter paced them without one rejection.
+- **Criterion 4 was low, and it's the one I'd tighten.** It checks facts the
+  prompt hands the model word for word (`$24`, `Depop`) plus a length the model
+  was nowhere near (39–58 words against a ceiling of 80). It never looked at
+  the thing I noticed in unit 3: **16 of the 20 fit cards in this run open
+  with "Scored this"**, and almost every one follows the same three-sentence
+  pattern ("Scored this X on Depop for just $N…" / "I'm pairing it with…" /
+  "It's so soft and worn-in."). A tighter version would be: across 5 tries, no
+  more than 2 cards share their first two words. Before this run, that would
+  have failed 0 of 5.
+- **Criterion 5 measured the wrong field**, so I revised it (in `criteria.md`,
+  under the original). Its reason says the failure I care about is the agent
+  making up a closet. The outfit text never did that; the fit card did, every
+  time.
+
+**Diagnosis of the revised criterion 5 miss (0/5).**
+
+- **Where:** the model's output, caused by the prompt in
+  `tools.py::create_fit_card`. Not the session, and not the branch.
+- **Mechanism:**
+  1. With an empty wardrobe, `suggest_outfit` correctly returns *general* ideas
+     made of pieces the user may not own, like "an olive green slip dress" or
+     "a fitted black ribbed turtleneck".
+  2. That string goes into the session as `outfit_suggestion`, and
+     `create_fit_card` reads it from there. The state is fine.
+  3. But `create_fit_card` only receives `(outfit, new_item)`, so it never
+     learns the wardrobe was empty, and its prompt introduces the outfit as
+     **"How I'm styling it:"**. Its system prompt also says "write like a real
+     person posting their outfit… first person".
+  4. So the model does exactly what it was asked: it narrates the suggestion as
+     something the user already wore.
+
+  In the full-wardrobe runs, the same framing is *true*, because the pieces are
+  ones the user owns. That's why this only shows on the empty-wardrobe path,
+  and why criteria 1, 3, and 4 never noticed it.
+
+The five before cards (`tools.py::create_fit_card`, empty wardrobe, `'denim
+jacket under $50'`):
+
+```
+try 1: … I am throwing it over an olive green slip dress, adding a vintage canvas tote bag, and finishing the look with well-worn retro sneakers …
+try 2: … I threw it over an olive green slip dress with some beat-up leather boots …
+try 3: … I styled it for streetwear vibes with baggy olive green cargo pants, a white cropped ribbed tank top, and retro canvas sneakers.
+try 4: … I layered it over a fitted black ribbed turtleneck, paired with wide-leg olive green trousers and vintage leather loafers …
+try 5: … I'm styling it over an olive green slip dress with distressed leather boots …
+```
+
+**The pattern:** both real weaknesses this run turned up come from the same
+tool and the same prompt, `create_fit_card`'s. The invented closet comes from
+the "How I'm styling it" framing. The repeated opener comes from a prompt that
+lists item, price, and platform up front, which the model turns into the same
+"Scored this X on P for just $N" sentence. That's one problem, not two. The
+other two tools and the loop held up everywhere they were tested.
 
 ---
 

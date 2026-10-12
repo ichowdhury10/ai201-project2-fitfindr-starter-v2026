@@ -144,6 +144,29 @@ same model-call failures as criterion 1, and a prompt that only steers this
 rather than enforcing it. It isn't lower because the prompt does say outright
 that the wardrobe is unknown.
 
+> **Revised in unit 4:** With an empty wardrobe and `'denim jacket under $50'`,
+> in at least 4 of 5 tries, the agent completes all three tool calls and
+> returns a fit card that does not describe the user as already wearing, or
+> having styled, the jacket with any other specific piece.
+>
+> **How to check:** In `session["fit_card"]`, find every first-person present-
+> or past-tense styling claim about the item with
+> `\bI(?:'m|’m| am)?\s+(?:just\s+)?(?:\w+ing|threw|tucked|layered|paired|styled|wore|put)\s+(?:it|this)\b`.
+> The try fails if the rest of that sentence pairs it `with`, `over`, `under`,
+> or `into` something ("I threw it over an olive green slip dress"). Plans and
+> ideas ("can't wait to wear it with…", "would look great over…") pass. I also
+> read every card to confirm the regex's call.
+>
+> **Why revised:** The original measured the wrong field. Its own reason says
+> the failure I care about on this path is "the agent making up a closet".
+> But it only searched `outfit_suggestion` for "your", and in the before run
+> that was never the problem: the outfit text passed 5 of 5. The invented
+> closet showed up one tool later, in the fit card, written in first person.
+> All five cards say things like "I threw it over an olive green slip dress",
+> about a user whose wardrobe is empty. The original check couldn't see that,
+> so a 5/5 there said nothing about the failure it was written to catch. The
+> target stays 4 of 5, for the same reasons as the original.
+
 ---
 
 <!-- ─────────────────────────────────────────────────────────────────────────
