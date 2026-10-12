@@ -310,22 +310,6 @@ three of the acceptance criteria.
   price: *"the closest match, "Denim Jacket — Light Wash, Cropped", is $42.
   Raise your max price to $42 to see it."* (`agent.py::_explain_empty`)
 
-**Moment 2: having the model write the criteria**
-
-- *What I asked for:* Criteria 3–5 in `criteria.md`, and the reasons under all
-  five. Claude first declined and pointed to the brief's rule against having a
-  model write them. I told it to write them anyway.
-- *What came back:* Before writing anything, it read `run_eval.py` and saw that
-  each criterion is scored as one scenario run five times. So it built each
-  criterion around a single named query, and added a "How to check" line so a
-  grader doesn't have to guess what counts as a pass. It also checked its first
-  draft's claim about `generate()` against the code: after 5 rate-limit retries
-  it raises a `RuntimeError` rather than just "giving up".
-- *What I changed:* The criterion 1 reason was corrected to name the
-  `RuntimeError`. The criteria are model-written, so in unit 4 I'll have to
-  defend targets I didn't set myself. Criterion 5 (no "your" in empty-wardrobe
-  outfits) is the one I'm least sure the model can meet.
-
 <!-- ═══════════════════════ UNIT 4 — THE TEST ═══════════════════════
 
      Don't fill these in during unit 3.
