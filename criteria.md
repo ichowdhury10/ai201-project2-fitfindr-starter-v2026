@@ -17,6 +17,10 @@ data earns credit; *"80% seemed reasonable"* does not.
 
 **Two are written for you. You write three.**
 
+Every "try" below is one run of `agent.py::run_agent` with the response cache
+off (`run_eval.py` turns it off, or set `AI201_CACHE=0`), so each model call is
+a real call.
+
 ---
 
 ## 1. A matching query completes all three tools
@@ -24,10 +28,21 @@ data earns credit; *"80% seemed reasonable"* does not.
 Given a query that matches at least one listing, the agent completes all three
 tool calls and returns a fit card — in at least 4 of 5 tries.
 
-**Why this target:**
-<!-- Why 4 of 5 and not 5 of 5? Something about your search, probably —
-     "my search is a plain keyword match and some phrasings will miss" is a
-     real answer. -->
+**How to check:** Run `'vintage graphic tee under $30'` with the example
+wardrobe. A try passes if `session["error"]` is `None`, `session["fit_card"]`
+is a non-empty string, and `session["tool_calls"]` lists `search_listings`,
+`suggest_outfit`, and `create_fit_card` in that order. A crash counts as a
+fail.
+
+**Why this target:** For a fixed query, the parsing (regex) and
+`search_listings` (keyword scoring, no model) are deterministic. If the search
+finds the tee once, it finds it every time, so the search can't be what causes
+an occasional miss. The variation is in the two model calls.
+`generate()` raises `ModelUnavailable` on any error that isn't a rate limit,
+and it raises a `RuntimeError` after 5 rate-limit retries. `run_agent` doesn't
+catch either one until unit 4. So I'm allowing one try in five for a network or quota
+failure. I'm not allowing more than one, because this query's top match
+(`lst_006`) is a strong keyword hit on all three words.
 
 ---
 
@@ -36,67 +51,98 @@ tool calls and returns a fit card — in at least 4 of 5 tries.
 Given a query that matches no listings, the agent stops before calling
 `suggest_outfit` and returns a message naming what to change — 5 of 5 tries.
 
-**Why this target:**
-<!-- Why is 5 of 5 reasonable here when criterion 1 isn't? What's different
-     about this path? -->
+**How to check:** Run `'designer ballgown size XXS under $5'`. A try passes if
+all four of these hold:
+
+- `session["fit_card"]` and `session["outfit_suggestion"]` are both `None`.
+- No entry in `session["tool_calls"]` is `suggest_outfit` or `create_fit_card`.
+- The run used 0 model calls.
+- `session["error"]` names the price, the size, or the specific words as the
+  thing to change. "No results" alone fails.
+
+**Why this target:** This path never touches the model. It's regex,
+`search_listings`, a Python `if`, and `_explain_empty`, which picks one of four
+fixed message templates. The same input produces the same output every time,
+so there's no randomness to leave room for. A single miss would mean the branch
+itself is wrong, and that's exactly what this criterion exists to catch.
 
 ---
 
-## 3. Something about state
+## 3. The item search found is the item the next two tools receive
 
-<!-- YOU WRITE THIS ONE.
+For `'vintage graphic tee under $30, size M'`, in 5 of 5 tries, the `id` of
+`session["selected_item"]` equals `session["search_results"][0]["id"]`, and it
+also equals the `item_id` recorded in `session["tool_calls"]` for both the
+`suggest_outfit` call and the `create_fit_card` call.
 
-     How would you know that the item your search found is the same item the
-     next tool received? Name something countable or observable.
+**How to check:** After each run, print `session["selected_item"]["id"]`,
+`session["search_results"][0]["id"]`, and the `item_id` of the
+`suggest_outfit` and `create_fit_card` entries in `session["tool_calls"]`. All
+four have to be the same listing id. `run_agent` records each tool call's
+`item_id` from the exact dict it passes to that tool, so the record shows what
+the tool actually received.
 
-     This is the criterion people find hardest, because state failure doesn't
-     look like state failure — it looks like a tool problem. Something that
-     compares session["selected_item"] against what actually reached
-     suggest_outfit is the shape you're after. -->
-
-
-
-**Why this target:**
-
-
-
----
-
-## 4. Something about the fit card
-
-<!-- YOU WRITE THIS ONE.
-
-     The fit card calls a model, so the same input can produce different words
-     each time. That's not a bug — it's the nature of the tool. So what would
-     make it acceptable?
-
-     Think about what you'd actually be unhappy to see. A caption that never
-     mentions the price? Two different items producing the same opening
-     sentence? A card longer than a caption anyone would post? Any of those can
-     be turned into a number. -->
-
-
-
-**Why this target:**
-
-
+**Why this target:** Passing the item along is plain Python dict handling, with
+no model involved, so nothing about it should vary between tries. The ways it
+could break are bugs in my loop: picking from a stale list, re-searching between
+steps, or one tool reading a different field than the other. Accepting 4 of 5
+would mean accepting one of those bugs. I chose a query with a size filter so
+that the item that has to flow through (`S/M`, not one of the `L` tees) is
+different from what an unfiltered search would put first.
 
 ---
 
-## 5. Your choice
+## 4. The fit card gets the facts right, whatever words it uses
 
-<!-- YOU WRITE THIS ONE TOO.
+For `'vintage graphic tee under $30'`, at least 4 of 5 fit cards must meet all
+three of these:
 
-     Pick something you actually care about getting right. Speed, the empty
-     wardrobe path, what happens when the model can't be reached, whether the
-     search respects a price ceiling — anything, as long as it names a number
-     or an observable outcome. -->
+- They contain the selected item's price written exactly as
+  `tools.price_text` formats it (e.g. `$24`).
+- They name the item's platform (`Depop`, `thredUP`, or `Poshmark`; any
+  capitalization).
+- They are 2 to 4 sentences long and at most 80 words.
 
+**How to check:** For each try, search `session["fit_card"]` for the price
+string and the platform name. Count words by splitting on spaces. Count
+sentences by the `.`, `!`, and `?` that end one; emoji after the last sentence
+don't count as one.
 
+**Why this target:** The words are supposed to change from try to try. That's
+the temperature (0.9) doing its job, so I'm not scoring the wording. What makes
+the variation acceptable is that the facts and the length stay fixed: someone
+posting it needs the right price and platform, and a caption past 80 words
+isn't a caption. The prompt in `tools.py::create_fit_card` gives the exact price
+string and platform name, and asks for 2–4 sentences under 80 words. But
+nothing checks the reply or retries, so the model can still drop the platform
+or run long, and that's why it isn't 5 of 5. It isn't 3 of 5 because every fact
+it needs is spelled out in the prompt rather than left for the model to infer.
 
-**Why this target:**
+---
 
+## 5. An empty wardrobe still gets a full run, without inventing a closet
 
+With an empty wardrobe and `'denim jacket under $50'`, in at least 4 of 5 tries,
+the agent completes all three tool calls and returns a fit card. In addition,
+`session["outfit_suggestion"]` does not contain the word "your" or "yours" as a
+whole word, in any capitalization.
+
+**How to check:** Run `python app.py ask 'denim jacket under $50'
+--empty-wardrobe`, or use run_eval's "empty wardrobe" scenario. A try passes if
+`session["error"]` is `None`, `session["fit_card"]` is non-empty, and a
+whole-word, case-insensitive search of `session["outfit_suggestion"]` for
+`your` or `yours` finds nothing.
+
+**Why this target:** When the wardrobe is empty, the agent knows nothing about
+what the user owns. So "pair it with your favorite jeans" is the agent making
+up a closet, and that's the failure I care about on this path.
+`suggest_outfit` sends a different prompt here, one that says nothing is known
+about the wardrobe. But it doesn't forbid second-person phrasing, and at
+temperature 0.9 the model may fall back on "your" because that's how most
+styling advice is written. It's 4 of 5 rather than 5 of 5 for two reasons: the
+same model-call failures as criterion 1, and a prompt that only steers this
+rather than enforcing it. It isn't lower because the prompt does say outright
+that the wardrobe is unknown.
 
 ---
 
