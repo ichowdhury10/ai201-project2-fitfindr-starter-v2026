@@ -41,6 +41,13 @@
 
 <!-- Three or four sentences: what a user asks for, and what they get back. -->
 
+FitFindr takes a plain-language thrift request, like
+`'vintage graphic tee under $30, size M'`, and pulls out what's being described,
+the size, and the price ceiling. It searches 40 Depop/thredUP/Poshmark listings
+for the best match. It then asks the model for two outfits that pair that item
+with pieces already in the user's wardrobe, and writes a short caption they
+could post. If nothing matches, it stops before any model call and says which
+part of the request to change: the price, the size, or the words.
 
 
 ---
@@ -217,25 +224,60 @@ each one received.
 **One full query**
 
 ```
-$ python app.py ask '...'
+$ python app.py ask 'vintage graphic tee under $30, size M'
 
+  Found:    Y2K Baby Tee — Butterfly Print — $18.0 on depop
+
+  Outfit:   1. Pair the Y2K Baby Tee — Butterfly Print with baggy straight-leg jeans, dark wash, finished off with chunky white sneakers and the black crossbody bag.
+
+2. Layer the Y2K Baby Tee — Butterfly Print over wide-leg khaki trousers, styled with the vintage black denim jacket and black combat boots.
+
+  Fit card: Scored this little butterfly tee on Depop for just $18 and I am obsessed. I threw it on with some baggy straight-leg jeans, chunky white sneakers, and my black crossbody bag. It is giving major early 2000s mall rat in the best way possible. 🦋✨
+```
+
+**And one that matches nothing.** It stops before `suggest_outfit`:
+
+```
+$ python app.py ask 'designer ballgown size XXS under $5'
+
+  No listings matched "designer ballgown" in size XXS under $5. Nothing in the listings matches the words "designer ballgown" at any size or price, so changing the filters won't help. Try broader words: a category (tee, jeans, jacket, sneakers) or a style (vintage, y2k, grunge, cottagecore).
+
+0 model calls this session
 ```
 
 **The three tools, tested one at a time**
 
 ```
-$ python -c "from tools import search_listings; print(search_listings('graphic tee', max_price=30))"
-
+$ python -c "from tools import search_listings; print([(l['title'], l['size'], l['price']) for l in search_listings('graphic tee', max_price=30)]); print(search_listings('designer ballgown', 'XXS', 5))"
+[('Graphic Tee — 2003 Tour Bootleg Style', 'L', 24.0), ('Y2K Baby Tee — Butterfly Print', 'S/M', 18.0), ('Vintage Band Tee — Faded Grey', 'L', 19.0), ('Vintage Graphic Hoodie — Faded Black', 'L', 26.0), ('Mesh Long-Sleeve Top — Black', 'S/M', 15.0), ('Oversized Crewneck Sweatshirt — Vintage Navy', 'XL (fits oversized)', 20.0), ('Low-Rise Cargo Pants — Khaki', 'W29', 27.0)]
+[]
 ```
 
 ```
-$ python -c "from tools import suggest_outfit; ..."
+$ python -c "from tools import suggest_outfit; from utils.data_loader import get_example_wardrobe, get_empty_wardrobe, load_listings; item = load_listings()[0]; print(suggest_outfit(item, get_example_wardrobe())); print('--- empty wardrobe:'); print(suggest_outfit(item, get_empty_wardrobe()))"
+1. Pair the new vintage Levi's 501 jeans with the white ribbed tank top, the oversized grey crewneck sweatshirt layered on top, and the chunky white sneakers. Add the black crossbody bag to complete this casual streetwear look.
 
+2. Style the new vintage Levi's 501 jeans with the white ribbed tank top tucked in, the vintage black denim jacket, and the brown leather belt. Finish the outfit with the black combat boots and the black crossbody bag.
+--- empty wardrobe:
+1. Pair these jeans with a cropped white ribbed tank top, an oversized black leather blazer, and chunky black loafers for a cool, effortless street style look.
+
+2. Tuck a vintage graphic tee into the waistband, add a brown leather belt, and finish with retro sneakers to lean into a classic casual aesthetic.
 ```
 
 ```
-$ python -c "from tools import create_fit_card; ..."
+$ python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('jeans and white sneakers', load_listings()[0])); print(repr(create_fit_card('', load_listings()[0])))"
+Scored these vintage Levi's on Depop for just $38. I'm living in these jeans and crisp white sneakers for that effortlessly cool errand-runner aesthetic. They fit like an absolute dream. 👖✨
+"Can't write a fit card without an outfit suggestion — suggest_outfit returned nothing for Vintage Levi's 501 Jeans — Medium Wash."
+```
 
+**`create_fit_card` three times on the same item, cache off (`AI201_CACHE=0`).**
+The words differ every time, but all three open with "Scored this … on Depop
+for just $24":
+
+```
+Scored this vintage-style graphic tee on Depop for just $24. I threw it on with baggy straight-leg jeans and black combat boots for the ultimate grunge street style vibe. It is so soft and worn-in.
+Scored this vintage-style bootleg graphic tee on Depop for just $24. It has that perfectly worn-in boxy fit. I'm wearing it with baggy straight-leg jeans for a gritty grunge look.
+Scored this faded 2003 tour bootleg tee on Depop for just $24. Threw it on with my baggy straight-leg jeans for that ultimate grunge look. It has the best worn-in feel.
 ```
 
 ---
@@ -249,17 +291,40 @@ $ python -c "from tools import create_fit_card; ..."
      "I gave Claude my search_listings spec. It returned None on no match
      instead of an empty list, so I changed it" is the level we want. -->
 
-**Moment 1**
+I used Claude (Claude Code) for this whole unit. I gave it the project brief and
+it did setup, wrote the tool specs, built `tools.py` and `agent.py`, and wrote
+three of the acceptance criteria.
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+**Moment 1: the empty-search message pointed at the wrong item**
 
-**Moment 2**
+- *What I asked for:* An empty-search message that says what to change, not
+  just "No results". The loop re-runs `search_listings` with one filter removed
+  at a time to find which filter emptied the results.
+- *What came back:* For `'denim jacket under $10'` it said *"the cheapest match
+  is $24 — raise your max price to at least $24."* But the $24 listing is
+  High-Waisted Denim Shorts. The keyword search counts any listing with "denim"
+  in it as a match, and the message picked the cheapest of them, not the best
+  one. Raising the budget to $24 would have shown shorts to someone who asked
+  for a jacket.
+- *What I changed:* The message now names the **top-ranked** match and its
+  price: *"the closest match, "Denim Jacket — Light Wash, Cropped", is $42.
+  Raise your max price to $42 to see it."* (`agent.py::_explain_empty`)
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+**Moment 2: having the model write the criteria**
+
+- *What I asked for:* Criteria 3–5 in `criteria.md`, and the reasons under all
+  five. Claude first declined and pointed to the brief's rule against having a
+  model write them. I told it to write them anyway.
+- *What came back:* Before writing anything, it read `run_eval.py` and saw that
+  each criterion is scored as one scenario run five times. So it built each
+  criterion around a single named query, and added a "How to check" line so a
+  grader doesn't have to guess what counts as a pass. It also checked its first
+  draft's claim about `generate()` against the code: after 5 rate-limit retries
+  it raises a `RuntimeError` rather than just "giving up".
+- *What I changed:* The criterion 1 reason was corrected to name the
+  `RuntimeError`. The criteria are model-written, so in unit 4 I'll have to
+  defend targets I didn't set myself. Criterion 5 (no "your" in empty-wardrobe
+  outfits) is the one I'm least sure the model can meet.
 
 <!-- ═══════════════════════ UNIT 4 — THE TEST ═══════════════════════
 
